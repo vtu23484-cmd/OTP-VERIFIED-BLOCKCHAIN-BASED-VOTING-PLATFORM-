@@ -1,0 +1,278 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+)
+
+// SmartContract structure
+type SmartContract struct {
+	contractapi.Contract
+}
+
+// Voter structure
+type Voter struct {
+	VoterID     string `json:"voterID"`
+	OTP         string `json:"otp"`
+	OTPVerified bool   `json:"otpVerified"`
+	HasVoted    bool   `json:"hasVoted"`
+	Vote        string `json:"vote"`
+
+}
+
+type Election struct {
+    ID     string `json:"id"`
+    IsOpen bool   `json:"isOpen"`
+}
+
+// Candidate structure
+type Candidate struct {
+	CandidateID string `json:"candidateID"`
+	VoteCount   int    `json:"voteCount"`
+}
+
+// ==========================
+// Register Voter
+// ==========================
+func (s *SmartContract) RegisterVoter(ctx contractapi.TransactionContextInterface, voterID string) error {
+
+	existing, err := ctx.GetStub().GetState(voterID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return fmt.Errorf("voter already exists")
+	}
+
+	voter := Voter{
+		VoterID:     voterID,
+		OTP:         "1234",
+		OTPVerified: false,
+		HasVoted:    false,
+		Vote:        "",
+	}
+
+	voterJSON, err := json.Marshal(voter)
+	if err != nil {
+		return err
+	}
+
+	return ctx.GetStub().PutState(voterID, voterJSON)
+}
+
+// ==========================
+// Verify OTP
+// ==========================
+func (s *SmartContract) VerifyOTP(ctx contractapi.TransactionContextInterface, voterID string, otp string) error {
+
+	voterJSON, err := ctx.GetStub().GetState(voterID)
+	if err != nil || voterJSON == nil {
+		return fmt.Errorf("voter not found")
+	}
+
+	var voter Voter
+	err = json.Unmarshal(voterJSON, &voter)
+	if err != nil {
+		return err
+	}
+
+	if voter.OTP != otp {
+		return fmt.Errorf("invalid otp")
+	}
+
+	voter.OTPVerified = true
+
+	updatedJSON, err := json.Marshal(voter)
+	if err != nil {
+		return err
+	}
+
+	return ctx.GetStub().PutState(voterID, updatedJSON)
+}
+
+// ==========================
+// Cast Vote
+// ==========================
+func (s *SmartContract) CastVote(ctx contractapi.TransactionContextInterface, voterID string, candidateID string) error {
+
+	voterJSON, err := ctx.GetStub().GetState(voterID)
+	if err != nil || voterJSON == nil {
+		return fmt.Errorf("voter not found")
+	}
+
+	var voter Voter
+	err = json.Unmarshal(voterJSON, &voter)
+	if err != nil {
+		return err
+	}
+
+	if !voter.OTPVerified {
+		return fmt.Errorf("OTP not verified")
+	}
+
+	if voter.HasVoted {
+		return fmt.Errorf("already voted")
+	}
+
+	// Update Candidate Count
+	candidateJSON, err := ctx.GetStub().GetState(candidateID)
+
+	var candidate Candidate
+	if candidateJSON == nil {
+		candidate = Candidate{
+			CandidateID: candidateID,
+			VoteCount:   0,
+		}
+	} else {
+		err = json.Unmarshal(candidateJSON, &candidate)
+		if err != nil {
+			return err
+		}
+	}
+
+	candidate.VoteCount++
+
+	candidateUpdated, err := json.Marshal(candidate)
+	if err != nil {
+		return err
+	}
+
+	err = ctx.GetStub().PutState(candidateID, candidateUpdated)
+	if err != nil {
+		return err
+	}
+
+	// Mark voter as voted
+	voter.HasVoted = true
+	voter.Vote = candidateID
+
+	voterUpdated, err := json.Marshal(voter)
+	if err != nil {
+		return err
+	}
+
+	err = ctx.GetStub().PutState(voterID, voterUpdated)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ==========================
+// Query Voter
+// ==========================
+func (s *SmartContract) QueryVoter(ctx contractapi.TransactionContextInterface, voterID string) (*Voter, error) {
+
+	voterJSON, err := ctx.GetStub().GetState(voterID)
+	if err != nil || voterJSON == nil {
+		return nil, fmt.Errorf("voter not found")
+	}
+
+	var voter Voter
+	err = json.Unmarshal(voterJSON, &voter)
+	if err != nil {
+		return nil, err
+	}
+
+	return &voter, nil
+}
+
+// ==========================
+// Query Result
+// ==========================
+func (s *SmartContract) QueryResult(ctx contractapi.TransactionContextInterface, candidateID string) (*Candidate, error) {
+
+	candidateJSON, err := ctx.GetStub().GetState(candidateID)
+	if err != nil || candidateJSON == nil {
+		return nil, fmt.Errorf("candidate not found")
+	}
+
+	var candidate Candidate
+	err = json.Unmarshal(candidateJSON, &candidate)
+	if err != nil {
+		return nil, err
+	}
+
+	return &candidate, nil
+}
+
+
+func (s *SmartContract) CreateElection(ctx contractapi.TransactionContextInterface, electionID string) error {
+
+    election := Election{
+        ID:     electionID,
+        IsOpen: false,
+    }
+
+    electionJSON, err := json.Marshal(election)
+    if err != nil {
+        return err
+    }
+
+    return ctx.GetStub().PutState("ELECTION_"+electionID, electionJSON)
+}
+func (s *SmartContract) OpenElection(ctx contractapi.TransactionContextInterface, electionID string) error {
+
+    electionBytes, err := ctx.GetStub().GetState("ELECTION_" + electionID)
+    if err != nil || electionBytes == nil {
+        return fmt.Errorf("election not found")
+    }
+
+    var election Election
+    json.Unmarshal(electionBytes, &election)
+
+    election.IsOpen = true
+
+    updatedJSON, _ := json.Marshal(election)
+    return ctx.GetStub().PutState("ELECTION_"+electionID, updatedJSON)
+}
+
+
+func (s *SmartContract) CloseElection(ctx contractapi.TransactionContextInterface, electionID string) error {
+
+    electionBytes, err := ctx.GetStub().GetState("ELECTION_" + electionID)
+    if err != nil || electionBytes == nil {
+        return fmt.Errorf("election not found")
+    }
+
+    var election Election
+    json.Unmarshal(electionBytes, &election)
+
+    election.IsOpen = false
+
+    updatedJSON, _ := json.Marshal(election)
+    return ctx.GetStub().PutState("ELECTION_"+electionID, updatedJSON)
+}
+
+
+electionBytes, err := ctx.GetStub().GetState("ELECTION_election1")
+if err != nil || electionBytes == nil {
+    return fmt.Errorf("election not found")
+}
+
+var election Election
+json.Unmarshal(electionBytes, &election)
+
+if !election.IsOpen {
+    return fmt.Errorf("election is closed")
+}
+
+
+// ==========================
+// Main
+// ==========================
+func main() {
+
+	chaincode, err := contractapi.NewChaincode(new(SmartContract))
+	if err != nil {
+		panic(err.Error())
+	}
+
+	if err := chaincode.Start(); err != nil {
+		panic(err.Error())
+	}
+}
+
